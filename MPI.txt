@@ -1,0 +1,216 @@
+#include <iostream>
+#include <vector>
+#include <set>
+#include <map>
+#include <chrono>
+#include <random>
+#include <algorithm>
+
+using namespace std;
+
+// Tipuri comune
+using Clause = set<int>;
+using CNF = set<Clause>;
+
+// Generator aleatoriu de formule CNF
+vector<vector<int>> generateRandomCNF(int numVars, int numClauses, int literalsPerClause) {
+    random_device rd;
+    mt19937 gen(rd());
+    uniform_int_distribution<> varDist(1, numVars);
+    uniform_int_distribution<> signDist(0, 1);
+
+    vector<vector<int>> formula;
+
+    for (int i = 0; i < numClauses; ++i) {
+        set<int> clauseSet;
+        while ((int)clauseSet.size() < literalsPerClause) {
+            int var = varDist(gen);
+            int lit = signDist(gen) ? var : -var;
+            clauseSet.insert(lit);
+        }
+        formula.emplace_back(clauseSet.begin(), clauseSet.end());
+    }
+
+    return formula;
+}
+
+// DPLL
+bool DPLL_recursive(vector<vector<int>> formula, map<int, bool> assignment) {
+    vector<vector<int>> simplified;
+    for (const auto& clause : formula) {
+        bool clauseTrue = false;
+        vector<int> newClause;
+        for (int lit : clause) {
+            if (assignment.count(abs(lit))) {
+                bool val = assignment[abs(lit)];
+                if ((lit > 0 && val) || (lit < 0 && !val)) {
+                    clauseTrue = true;
+                    break;
+                }
+            } else {
+                newClause.push_back(lit);
+            }
+        }
+        if (!clauseTrue) {
+            if (newClause.empty()) return false;
+            simplified.push_back(newClause);
+        }
+    }
+
+    if (simplified.empty()) return true;
+
+    int lit = abs(simplified[0][0]);
+    map<int, bool> aTrue = assignment, aFalse = assignment;
+    aTrue[lit] = true;
+    aFalse[lit] = false;
+
+    return DPLL_recursive(simplified, aTrue) || DPLL_recursive(simplified, aFalse);
+}
+
+bool DPLL(vector<vector<int>> formula, map<int, bool> assignment = {}) {
+    return DPLL_recursive(formula, assignment);
+}
+
+// Rezolutie
+bool resolveClauses(const Clause& c1, const Clause& c2, Clause& resolvent) {
+    for (int lit1 : c1) {
+        if (c2.count(-lit1)) {
+            resolvent.clear();
+            for (int l : c1)
+                if (l != lit1) resolvent.insert(l);
+            for (int l : c2)
+                if (l != -lit1) resolvent.insert(l);
+            return true;
+        }
+    }
+    return false;
+}
+
+bool resolutionAlgorithm(CNF formula) {
+    CNF newClauses;
+    do {
+        newClauses.clear();
+        vector<Clause> clauses(formula.begin(), formula.end());
+
+        for (size_t i = 0; i < clauses.size(); ++i) {
+            for (size_t j = i + 1; j < clauses.size(); ++j) {
+                Clause resolvent;
+                if (resolveClauses(clauses[i], clauses[j], resolvent)) {
+                    if (resolvent.empty()) {
+                        return false;
+                    }
+                    if (!formula.count(resolvent)) {
+                        newClauses.insert(resolvent);
+                    }
+                }
+            }
+        }
+
+        for (const Clause& c : newClauses) {
+            formula.insert(c);
+        }
+
+    } while (!newClauses.empty());
+
+    return true;
+}
+
+// Davis-Putnam
+bool resolveDP(const Clause& c1, const Clause& c2, int var, Clause& resolvent) {
+    if (c1.count(var) && c2.count(-var)) {
+        resolvent.clear();
+        for (int lit : c1)
+            if (lit != var) resolvent.insert(lit);
+        for (int lit : c2)
+            if (lit != -var) resolvent.insert(lit);
+        return true;
+    }
+    return false;
+}
+
+bool davisPutnam(CNF formula) {
+    set<int> vars;
+    for (const auto& clause : formula)
+        for (int lit : clause)
+            vars.insert(abs(lit));
+
+    for (int var : vars) {
+        CNF pos, neg, rest;
+
+        for (const auto& clause : formula) {
+            if (clause.count(var))
+                pos.insert(clause);
+            else if (clause.count(-var))
+                neg.insert(clause);
+            else
+                rest.insert(clause);
+        }
+
+        CNF resolvents;
+        for (const auto& c1 : pos) {
+            for (const auto& c2 : neg) {
+                Clause res;
+                if (resolveDP(c1, c2, var, res)) {
+                    if (res.empty())
+                        return false;
+                    resolvents.insert(res);
+                }
+            }
+        }
+
+        formula = rest;
+        for (const auto& c : resolvents) {
+            formula.insert(c);
+        }
+    }
+
+    return true;
+}
+
+// Benchmark
+void benchmark(const string& name, const vector<vector<int>>& vecFormula) {
+    cout << "\n==============================\n";
+    cout << "Formula: " << name << endl;
+
+    CNF cnfFormula;
+    for (const auto& clause : vecFormula)
+        cnfFormula.insert(Clause(clause.begin(), clause.end()));
+
+    auto start = chrono::high_resolution_clock::now();
+    bool satDPLL = DPLL(vecFormula);
+    auto end = chrono::high_resolution_clock::now();
+    cout << "[DPLL]           " << (satDPLL ? "SAT" : "UNSAT")
+         << " | Time: " << chrono::duration_cast<chrono::microseconds>(end - start).count() << " us" << endl;
+
+    start = chrono::high_resolution_clock::now();
+    bool satRes = resolutionAlgorithm(cnfFormula);
+    end = chrono::high_resolution_clock::now();
+    cout << "[Rezolutie]      " << (satRes ? "SAT" : "UNSAT")
+         << " | Time: " << chrono::duration_cast<chrono::microseconds>(end - start).count() << " us" << endl;
+
+    start = chrono::high_resolution_clock::now();
+    bool satDP = davisPutnam(cnfFormula);
+    end = chrono::high_resolution_clock::now();
+    cout << "[Davis-Putnam]   " << (satDP ? "SAT" : "UNSAT")
+         << " | Time: " << chrono::duration_cast<chrono::microseconds>(end - start).count() << " us" << endl;
+}
+
+// Main
+int main() {
+    // Formula hardcodata
+    vector<vector<int>> f1 = {
+        {1, -2},
+        {-1},
+        {2}
+    };
+
+    benchmark("Formula 1 (hardcodata)", f1);
+
+    // Formule aleatorii
+    for (int i = 1; i <= 3; ++i) {
+        auto randomFormula = generateRandomCNF(5, 10, 3);
+        benchmark("Formula aleatoare " + to_string(i), randomFormula);
+    }
+
+    return 0;
+}
